@@ -19,52 +19,70 @@ if not API_KEY or not API_SECRET:
 # Initialize Kraken client
 kraken = krakenex.API(key=API_KEY, secret=API_SECRET)
 
-def get_kraken_signature(urlpath, data, secret):
-    """Generate Kraken API signature"""
-    postdata = urllib.parse.urlencode(data)
-    encoded = (str(data['nonce']) + postdata).encode()
-    message = urlpath.encode() + hashlib.sha256(encoded).digest()
-    signature = hmac.new(base64.b64decode(secret), message, hashlib.sha512)
-    return base64.b64encode(signature.digest()).decode()
+def to_kraken_pair(symbol):
+    """Map common symbol formats to Kraken pair codes"""
+    s = symbol.replace('-', '').replace('/', '').upper()
+    mapping = {
+        'BTCUSD': 'XBTUSD',
+        'BTCUSDT': 'XBTUSDT',
+        'XBTUSD': 'XBTUSD',
+        'ETHUSD': 'ETHUSD',
+        'ETHUSDT': 'ETHUSDT',
+    }
+    return mapping.get(s, s)
 
 def place_kraken_order(pair, side, amount_usd):
     """Place market order on Kraken"""
     try:
-        # Kraken uses different pair format: XBTUSD for BTC/USD
-        kraken_pair = pair.replace('-', '').replace('BTC', 'XBT').replace('USD', 'USD')
+        # Convert to Kraken pair format
+        kraken_pair = to_kraken_pair(pair)
         
-        # Get current price to calculate volume
+        print(f"Placing {side} order for {kraken_pair} with ${amount_usd}")
+        
+        # Get current price
         ticker_response = kraken.query_public('Ticker', {'pair': kraken_pair})
+        
         if ticker_response.get('error'):
             return {'success': False, 'error': f"Ticker error: {ticker_response['error']}"}
         
-        current_price = float(ticker_response['result'][kraken_pair]['c'][0])
-        volume = round(amount_usd / current_price, 8)  # BTC volume
+        # Get first result key (Kraken returns pair with possible alias)
+        result = ticker_response['result']
+        result_key = next(iter(result.keys()))
+        current_price = float(result[result_key]['c'][0])
         
-        # Prepare order
-        nonce = str(int(time.time() * 1000))
-        order_data = {
-            'nonce': nonce,
-            'ordertype': 'market',
-            'type': side,  # 'buy' or 'sell'
-            'volume': str(volume),
-            'pair': kraken_pair
-        }
+        # Calculate volume
+        volume = round(amount_usd / current_price, 8)
+        
+        print(f"Current price: ${current_price}, Volume: {volume}")
         
         # Place order
-        response = kraken.query_private('AddOrder', order_data)
+        order_response = kraken.query_private('AddOrder', {
+            'ordertype': 'market',
+            'type': side,
+            'volume': str(volume),
+            'pair': kraken_pair
+        })
         
-        if response.get('error'):
-            return {'success': False, 'error': response['error']}
+        if order_response.get('error'):
+            return {'success': False, 'error': order_response['error']}
+        
+        # Extract transaction ID
+        txid = None
+        if isinstance(order_response.get('result', {}).get('txid'), list):
+            if order_response['result']['txid']:
+                txid = order_response['result']['txid'][0]
+        
+        print(f"Order placed successfully. TxID: {txid}")
         
         return {
             'success': True,
-            'order_id': response['result']['txid'][0] if response['result'].get('txid') else None,
+            'order_id': txid,
             'volume': volume,
             'price': current_price
         }
     
     except Exception as e:
+        print(f"Exception in place_kraken_order: {str(e)}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/')
@@ -91,8 +109,15 @@ def webhook():
     try:
         data = request.get_json()
         
+        print(f"Received webhook data: {data}")
+        
         # Parse alert message (format: "symbol: BTC-USD; action: buy; amount: 10.0")
         message = data.get('message', '')
+        
+        if not message:
+            return jsonify({'error': 'No message field in request'}), 400
+        
+        print(f"Parsing message: {message}")
         
         # Extract fields
         parts = message.split(';')
@@ -113,6 +138,8 @@ def webhook():
                 elif key == 'amount':
                     amount = float(value)
         
+        print(f"Parsed - Symbol: {symbol}, Action: {action}, Amount: {amount}")
+        
         if not all([symbol, action, amount]):
             return jsonify({'error': 'Missing required fields: symbol, action, amount'}), 400
         
@@ -131,6 +158,7 @@ def webhook():
             return jsonify({'error': result['error']}), 400
     
     except Exception as e:
+        print(f"Exception in webhook: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
