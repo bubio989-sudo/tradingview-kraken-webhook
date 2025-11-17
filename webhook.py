@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
 KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")  # Bearer token
-DEFAULT_PAIR = os.getenv("DEFAULT_PAIR", "XBTUSD")  # Kraken pair fallback
+DEFAULT_PAIR = os.getenv("DEFAULT_PAIR", "BTCUSD")  # Kraken pair fallback
 
 kraken = krakenex.API()
 if KRAKEN_API_KEY and KRAKEN_API_SECRET:
