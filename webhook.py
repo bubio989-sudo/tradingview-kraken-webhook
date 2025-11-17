@@ -8,10 +8,10 @@ import krakenex
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Env vars
+# Env vars (set these on Render)
 KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
 KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")  # Bearer token
+WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")  # Bearer token expected in TradingView header
 DEFAULT_PAIR = os.getenv("DEFAULT_PAIR", "BTCUSD")  # Kraken pair fallback
 
 kraken = krakenex.API()
@@ -23,7 +23,7 @@ def normalize_pair(symbol: str) -> str:
     if not symbol:
         return DEFAULT_PAIR
     p = symbol.upper().replace('-', '').replace('_', '').replace('/', '')
-    p = p.replace('BTC', 'XBT')  # Kraken uses XBT
+    p = p.replace('BTC', 'XBT')
     return p
 
 def parse_message(payload):
@@ -83,21 +83,25 @@ def place_market_order(pair: str, action: str, volume: float):
     }
     return kraken.query_private('AddOrder', params)
 
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({"status":"service running", "endpoints":["/health","/webhook"]})
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status":"ok"})
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # Authorization header check (TradingView will send as custom header)
+    # Authorization header check (TradingView -> custom header)
     auth = request.headers.get('Authorization', '')
     if WEBHOOK_TOKEN:
         expected = f"Bearer {WEBHOOK_TOKEN}"
         if auth != expected:
-            logging.warning("Unauthorized request")
+            logging.warning("Unauthorized request: headers=%s", dict(request.headers))
             return jsonify({"status":"error","message":"unauthorized"}), 401
 
-    # load JSON if possible, else use raw body
+    # load JSON if possible, else raw body
     payload = None
     try:
         payload = request.get_json(force=True, silent=True) or request.data.decode('utf-8')
@@ -106,12 +110,13 @@ def webhook():
 
     parsed = parse_message(payload)
     if not parsed:
+        logging.error("Invalid payload: %s", payload)
         return jsonify({"status":"error","message":"invalid payload"}), 400
 
     symbol = normalize_pair(parsed['symbol'])
     action = parsed['action']
     usd_amount = float(parsed['amount'])
-    logging.info("Request parsed: %s %s %s", symbol, action, usd_amount)
+    logging.info("Parsed: symbol=%s action=%s usd_amount=%s", symbol, action, usd_amount)
 
     try:
         price = get_last_price(symbol)
